@@ -2,10 +2,9 @@ from data import COCODetection, get_label_map, MEANS, COLORS
 from convexmask import ConvexMask
 from utils.augmentations import BaseTransform, FastBaseTransform
 from utils.functions import MovingAverage, ProgressBar
-from layers.box_utils import jaccard, center_size, mask_iou
-from layers.polar_utils import poly2mask, detect_convex_points, get_centerpoint, poly2polar, polar2mask
+from layers.box_utils import jaccard, mask_iou
+from layers.polar_utils import poly2mask
 from utils import timer
-from utils.functions import SavePath
 from layers.output_utils import postprocess, undo_image_transformation
 import pycocotools
 
@@ -150,15 +149,6 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
     """
     Note: If undo_transform=False then im_h and im_w are allowed to be None.
     """
-    '''
-    print(dets_out[0]['detection']['proto'].shape)
-    path = '/home/2017018/rconda01/visu_proto/'
-    os.makedirs(path,exist_ok=True)
-    for i in range(32):
-        print(cv2.imwrite(path+'{}.png'.format(i),dets_out[0]['detection']['proto'][...,i].cpu().numpy().astype(np.uint8)*255))
-    exit()
-    '''
-
     if undo_transform:
         img_numpy = undo_image_transformation(img, w, h)
         img_gpu = torch.Tensor(img_numpy).cuda()
@@ -171,7 +161,6 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
         save = cfg.rescore_bbox
         cfg.rescore_bbox = True
         t = postprocess(dets_out, w, h, visualize_lincomb = args.display_lincomb,
-                                        crop_masks        = args.crop,
                                         score_threshold   = args.score_threshold,
                                         convex_poly       = args.convex_poly)
         cfg.rescore_bbox = save
@@ -292,7 +281,7 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
 
 def prep_benchmark(dets_out, h, w):
     with timer.env('Postprocess'):
-        t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=args.score_threshold, output_mask_poly = False)
+        t = postprocess(dets_out, w, h, score_threshold=args.score_threshold, output_mask_poly = False)
 
     with timer.env('Copy'):
         classes, scores, center_scores, boxes, masks, poly_coords = [x[:args.top_k] for x in t]
@@ -446,7 +435,7 @@ def prep_metrics(ap_data, dets, img, gt, gt_masks, gt_polygons, h, w, num_crowd,
                 crowd_classes, gt_classes = split(gt_classes)
 
     with timer.env('Postprocess'):
-        classes, scores, center_scores, boxes, masks, poly_coords, poly_masks = postprocess(dets, w, h, crop_masks=args.crop, score_threshold=args.score_threshold, output_mask_poly = True, convex_poly=True)
+        classes, scores, center_scores, boxes, masks, poly_coords, poly_masks = postprocess(dets, w, h, score_threshold=args.score_threshold, output_mask_poly = True, convex_poly=True)
         """
         path = '/home/2017018/rconda01/visu/'
         os.makedirs(path,exist_ok=True)
@@ -690,7 +679,7 @@ def evalimage(net:ConvexMask, path:str, save_path:str=None,detections:Detections
     
     h,w,_ = frame.shape
     if detections is not None:
-        classes, scores, center_scores, boxes, masks, poly_coords, poly_masks = postprocess(preds, w, h, crop_masks=args.crop, score_threshold=args.score_threshold, output_mask_poly = True, convex_poly=True)
+        classes, scores, center_scores, boxes, masks, poly_coords, poly_masks = postprocess(preds, w, h, score_threshold=args.score_threshold, output_mask_poly = True, convex_poly=True)
         boxes = boxes.cpu().numpy()
         poly_coords = poly_coords.cpu().numpy()
         masks = masks.view(-1, h, w).cpu().numpy()
@@ -1219,9 +1208,9 @@ if __name__ == '__main__':
         set_cfg(args.config)
 
     if args.config is None:
-        model_path = SavePath.from_str(args.trained_model)
+        model_name = args.trained_model
         # TODO: Bad practice? Probably want to do a name lookup instead.
-        args.config = model_path.model_name + '_config'
+        args.config = model_name + '_config'
         print('Config not specified. Parsed %s from the file name.\n' % args.config)
         set_cfg(args.config)
 
@@ -1230,11 +1219,6 @@ if __name__ == '__main__':
 
     if args.dataset is not None:
         set_dataset(args.dataset)
-
-    if args.kfold is not None:
-       cfg.dataset.test_info = cfg.dataset.test_info.replace('fold_00','fold_0{}'.format(args.kfold))
-       print(cfg.dataset.test_info)
-       cfg.name = cfg.name+'_k{}'.format(args.kfold)
 
     args.save_folder = args.home_dir+args.save_folder+cfg.name+'/'
     args.score_fold = args.home_dir+args.score_fold+cfg.name

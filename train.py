@@ -37,7 +37,6 @@ torch.backends.cudnn.benchmark = True
 parser = argparse.ArgumentParser(
     description='Yolact Training Script')
 
-parser.add_argument('--kfold',default=None, type=int)
 parser.add_argument('--home_dir',default='/home/2017018/rconda01/fold_results/', type=str)
 parser.add_argument('--tb_dir',default='tensorboard/', type=str)
 parser.add_argument('--resume', default=None, type=str,
@@ -60,17 +59,11 @@ parser.add_argument('--log_folder', default='logs/',
                     help='Directory for saving logs.')
 parser.add_argument('--config', default=None,
                     help='The config object to use.')
-parser.add_argument('--save_interval', default=10000, type=int,
-                    help='The number of iterations between saving the model.')
 parser.add_argument('--validation_size', default=5000, type=int,
                     help='The number of images to use for validation.')
 parser.add_argument('--log_iter', default=50,type=int)
 parser.add_argument('--validation_epoch', default=2, type=int,
                     help='Output validation information every n iterations. If -1, do no validation.')
-parser.add_argument('--keep_latest', dest='keep_latest', action='store_true',
-                    help='Only keep the latest checkpoint instead of each one.')
-parser.add_argument('--keep_latest_interval', default=100000, type=int,
-                    help='When --keep_latest is on, don\'t delete the latest file at these intervals. This should be a multiple of save_interval or 0.')
 parser.add_argument('--dataset', default=None, type=str,
                     help='If specified, override the dataset specified in the config with this one (example: coco2017_dataset).')
 parser.add_argument('--no_log', dest='log', action='store_false',
@@ -108,7 +101,7 @@ if args.autoscale and cfg.batch_size != 8:
         print('Scaling parameters by %.2f to account for a batch size of %d.' % (factor, cfg.batch_size))
 
     cfg.lr *= factor
-    cfg.max_iter //= factor
+    #cfg.max_iter //= factor
     #cfg.lr_steps = [x // factor for x in cfg.lr_steps]
 
 # Update training parameters from the config if necessary
@@ -368,8 +361,6 @@ def train():
 
             exit()
             """
-            # Append info for rot90
-            datum.append(True)
 
             # Change a config setting if we've reached the specified iteration
             changed = False
@@ -462,9 +453,6 @@ def train():
            
         # Validation
         for datum in val_loader:
-
-            # Append info for rot90
-            datum.append(False)
             
             optimizer.zero_grad()
             with autocast(enabled=amp):
@@ -520,19 +508,6 @@ def set_lr(optimizer, new_lr):
 def gradinator(x):
     x.requires_grad = False
     return x
-
-
-def Rot90(images, targets, masks):
-    k = np.random.randint(4)
-    images = torch.rot90(images,k,[2,3])
-    masks = [torch.rot90(mask,k,[1,2]) for mask in masks]
-    for i in range(len(images)):
-        _, old_width, old_height = images[i].size()
-        for _ in range(k):
-            targets[i] = torch.stack([targets[i][:,1], 1-1/old_width-targets[i][:,2],targets[i][:,3],1-1/old_width-targets[i][:,0],targets[i][:,4]],dim=1)
-            old_width, old_height = old_height, old_width
-    return images, targets, masks
-
 
 
 def prepare_data(datum, devices:list=None, allocation:list=None):
@@ -602,18 +577,6 @@ def prepare_data(datum, devices:list=None, allocation:list=None):
             cur_idx += alloc
         return split_images, split_targets, split_masks, split_polygons, split_numcrowds
 
-def no_inf_mean(x:torch.Tensor):
-    """
-    Computes the mean of a vector, throwing out all inf values.
-    If there are no non-inf values, this will return inf (i.e., just the normal mean).
-    """
-
-    no_inf = [a for a in x if torch.isfinite(a)]
-
-    if len(no_inf) > 0:
-        return sum(no_inf) / len(no_inf)
-    else:
-        return x.mean()
 
 def compute_validation_map(epoch, iteration, yolact_net, dataset, log:Log=None):
     with torch.no_grad():

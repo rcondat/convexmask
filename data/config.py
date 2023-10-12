@@ -3,20 +3,9 @@ from math import sqrt
 import torch
 import math
 
-
-COCO_RESIZE_SCALES = {
-    400: [(660, 400), (660, 384), (660, 368), (660, 352),
-          (660, 336), (660, 320)],
-    600: [(1000, 600), (1000, 576), (1000, 552), (1000, 528),
-          (1000, 504), (1000, 480)],
-    800: [(1330, 800), (1330, 768), (1330, 736), (1330, 704),
-          (1330, 672), (1330, 640)],
-}
-
-SYNTH_RESIZE_SCALES = {
-    720: [(1280, 720), (1216, 684), (1152, 648), (1088, 612),
-          (1024, 576), (960, 540)],
-}
+# These are in BGR and are for ImageNet
+MEANS = (103.94, 116.78, 123.68)
+STD   = (57.38, 57.12, 58.40)
 
 # for making bounding boxes pretty
 COLORS = ((244,  67,  54),
@@ -39,14 +28,6 @@ COLORS = ((244,  67,  54),
           (158, 158, 158),
           ( 96, 125, 139))
 
-
-# These are in BGR and are for ImageNet
-MEANS = (103.94, 116.78, 123.68)
-STD   = (57.38, 57.12, 58.40)
-
-#rgb
-#MEANS  = (123.68, 116.78, 103.94)
-#STD    = (58.40, 57.12, 57.38)
 
 COCO_CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
                 'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
@@ -74,6 +55,24 @@ COCO_LABEL_MAP = { 1:  1,  2:  2,  3:  3,  4:  4,  5:  5,  6:  6,  7:  7,  8:  8
                   74: 65, 75: 66, 76: 67, 77: 68, 78: 69, 79: 70, 80: 71, 81: 72,
                   82: 73, 84: 74, 85: 75, 86: 76, 87: 77, 88: 78, 89: 79, 90: 80}
 
+
+COCO_RESIZE_SCALES = {
+    400: [(660, 400), (660, 384), (660, 368), (660, 352),
+          (660, 336), (660, 320)],
+    600: [(1000, 600), (1000, 576), (1000, 552), (1000, 528),
+          (1000, 504), (1000, 480)],
+    800: [(1330, 800), (1330, 768), (1330, 736), (1330, 704),
+          (1330, 672), (1330, 640)],
+}
+
+SYNTH_CLASSES = ('tree')
+
+SYNTH_LABEL_MAP = {1: 1}
+
+SYNTH_RESIZE_SCALES = {
+    720: [(1280, 720), (1216, 684), (1152, 648), (1088, 612),
+          (1024, 576), (960, 540)],
+}
 
 
 # ----------------------- CONFIG CLASS ----------------------- #
@@ -121,8 +120,6 @@ class Config(object):
 
 
 
-
-
 # ----------------------- DATASETS ----------------------- #
 
 dataset_base = Config({
@@ -148,126 +145,22 @@ dataset_base = Config({
     'label_map': None
 })
 
-
 synthtree43k_dataset = dataset_base.copy({
     'name': 'SynthTree43K',
-    
-    'train_images': '/save/2017018/rconda01/SynthTree43k_RGB/train_set/',
-    'train_info': '/save/2017018/rconda01/SynthTree43k_RGB/train_RGB_refined.json',
 
-    'valid_images': '/save/2017018/rconda01/SynthTree43k_RGB/val_set/',
-    'valid_info': '/save/2017018/rconda01/SynthTree43k_RGB/val_RGB_refined.json',
+    'train_images': './data/synthtree43k/train_set/',
+    'train_info': './data/synthtree43k/annotations/train_RGB_convex.json',
 
-    'test_images': '/save/2017018/rconda01/SynthTree43k_RGB/test_set/',
-    'test_info': '/save/2017018/rconda01/SynthTree43k_RGB/test_RGB_refined.json',
+    'valid_images': './data/synthtree43k/val_set/',
+    'valid_info': './data/synthtree43k/annotations/val_RGB_convex.json',
 
- 'class_names':('tree'),
-})
-
-polar_synthtree43k_dataset_local = dataset_base.copy({
-    'name': 'SynthTree43K',
-    
-    'train_images': 'D://SynthTree43k_RGB//SynthTree43k_RGB//train_set//train_set//',
-    'train_info': 'D://SynthTree43k_RGB//polygons_annots//train_RGB_convex.json',
-
-    'valid_images': 'D://SynthTree43k_RGB//SynthTree43k_RGB//val_set//val_set//',
-    'valid_info': 'D://SynthTree43k_RGB//polygons_annots//val_RGB_convex.json',
-
-    'test_images': 'D://SynthTree43k_RGB//SynthTree43k_RGB//test_set//test_set//',
-    'test_info': 'D://SynthTree43k_RGB//polygons_annots//test_RGB_convex.json',
-
- 'class_names':('tree'),
-})
-
-polar_synthtree43k_dataset_colab = dataset_base.copy({
-    'name': 'SynthTree43K',
-    
-    'train_images': '..//val_set//',
-    'train_info': '..//val_RGB_convex.json',
-
-    'valid_images': '..//val_set//',
-    'valid_info': '..//val_RGB_convex.json',
-
-    'test_images': '..//val_set//',
-    'test_info': '..//val_RGB_convex.json',
-
- 'class_names':('tree'),
-})
-
-polar_synthtree43k_dataset_criann = dataset_base.copy({
-    'name': 'SynthTree43K',
-
-    'train_images': '/save/2017018/rconda01/SynthTree43k_RGB/train_set/',
-    'train_info': '/save/2017018/rconda01/SynthTree43k_RGB/convex_annots/train_RGB_convex.json',
-
-    'valid_images': '/save/2017018/rconda01/SynthTree43k_RGB/val_set/',
-    'valid_info': '/save/2017018/rconda01/SynthTree43k_RGB/convex_annots/val_RGB_convex.json',
-
-    'test_images': '/save/2017018/rconda01/SynthTree43k_RGB/test_set/',
-    'test_info': '/save/2017018/rconda01/SynthTree43k_RGB/convex_annots/test_RGB_convex.json',
+    'test_images': './data/synthtree43k/test_set/',
+    'test_info': './data/synthtree43k/annotations/test_RGB_convex.json',
 
  'class_names':('tree'),
 
 })
 
-polar_synthtree43k_dataset_criann_small = polar_synthtree43k_dataset_criann.copy({
-    'train_info': '/save/2017018/rconda01/SynthTree43k_RGB/convex_annots/train_RGB_convex_small.json',
-    'valid_info': '/save/2017018/rconda01/SynthTree43k_RGB/convex_annots/val_RGB_convex_small.json',
-    'test_info': '/save/2017018/rconda01/SynthTree43k_RGB/convex_annots/test_RGB_convex_small.json',
-})
-
-
-
-polar_synthtree43k_dataset_criann_refined = polar_synthtree43k_dataset_criann.copy({
-    'train_info': '/save/2017018/rconda01/SynthTree43k_RGB/train_RGB_refined.json',
-    'valid_info': '/save/2017018/rconda01/SynthTree43k_RGB/val_RGB_refined.json',
-    'test_info': '/save/2017018/rconda01/SynthTree43k_RGB/test_RGB_refined.json',
-})
-
-
-synthtree43k_dataset_debug = synthtree43k_dataset.copy({
-    'train_info': '/save/2017018/rconda01/SynthTree43k_RGB/train_RGB_refined_small.json',
-})
-
-
-synthtree43k_dataset_original = synthtree43k_dataset.copy({
-    'train_info': '/save/2017018/rconda01/SynthTree43k_RGB/train_RGB_original.json',
-    'valid_info': '/save/2017018/rconda01/SynthTree43k_RGB/val_RGB_original.json',
-    'test_info': '/save/2017018/rconda01/SynthTree43k_RGB/test_RGB_original.json',
-
-})
-
-synthtree43k_dataset_entire = synthtree43k_dataset.copy({
-    'train_info': '/save/2017018/rconda01/SynthTree43k_RGB/train_RGB_entire_tree.json',
-    'valid_info': '/save/2017018/rconda01/SynthTree43k_RGB/val_RGB_entire_tree.json',
-    'test_info': '/save/2017018/rconda01/SynthTree43k_RGB/test_RGB_entire_tree.json'
-})
-
-
-canatree_dataset = dataset_base.copy({
-    'name': 'CanaTree100',
-
-    'train_images': '/save/2017018/rconda01/CanaTree100/images/',
-    'train_info': '/save/2017018/rconda01/CanaTree100/annotations/fold_00/train_fold_00.json',
-
-    'valid_images': '/save/2017018/rconda01/CanaTree100/images/',
-    'valid_info': '/save/2017018/rconda01/CanaTree100/annotations/fold_00/val_fold_00.json',
-
-    'test_images': '/save/2017018/rconda01/CanaTree100/images/',
-    'test_info': '/save/2017018/rconda01/CanaTree100/annotations/fold_00/test_fold_00.json',
-
- 'class_names':('tree'),
-})
-
-
-coco2014_dataset = dataset_base.copy({
-    'name': 'COCO 2014',
-    
-    'train_info': './data/coco/annotations/instances_train2014.json',
-    'valid_info': './data/coco/annotations/instances_val2014.json',
-
-    'label_map': COCO_LABEL_MAP
-})
 
 coco2017_dataset = dataset_base.copy({
     'name': 'COCO 2017',
@@ -291,33 +184,6 @@ coco2017_testdev_dataset = dataset_base.copy({
 
     'label_map': COCO_LABEL_MAP
 })
-
-bat2017_dataset = coco2017_dataset.copy({
-    'name': 'BAT & FORK 2017',
-    'train_info': '/save/2017018/rconda01/COCO/annotations/bat_train2017.json',
-    'valid_info': '/save/2017018/rconda01/COCO/annotations/bat_val2017.json',
-
-})
-
-PASCAL_CLASSES = ("aeroplane", "bicycle", "bird", "boat", "bottle",
-                  "bus", "car", "cat", "chair", "cow", "diningtable",
-                  "dog", "horse", "motorbike", "person", "pottedplant",
-                  "sheep", "sofa", "train", "tvmonitor")
-
-pascal_sbd_dataset = dataset_base.copy({
-    'name': 'Pascal SBD 2012',
-
-    'train_images': './data/sbd/img',
-    'valid_images': './data/sbd/img',
-    
-    'train_info': './data/sbd/pascal_sbd_train.json',
-    'valid_info': './data/sbd/pascal_sbd_val.json',
-
-    'class_names': PASCAL_CLASSES,
-})
-
-
-
 
 
 # ----------------------- TRANSFORMS ----------------------- #
@@ -360,7 +226,6 @@ backbone_base = Config({
 
     'selected_layers': list(),
     'pred_scales': list(),
-    'pred_aspect_ratios': list(),
 
     'use_pixel_scales': False,
     'preapply_sqrt': True,
@@ -376,7 +241,6 @@ resnet101_backbone = backbone_base.copy({
 
     'selected_layers': list(range(2, 8)),
     'pred_scales': [[1]]*6,
-    'pred_aspect_ratios': [ [[0.66685089, 1.7073535, 0.87508774, 1.16524493, 0.49059086]] ] * 6,
 })
 
 resnet101_gn_backbone = backbone_base.copy({
@@ -388,7 +252,6 @@ resnet101_gn_backbone = backbone_base.copy({
 
     'selected_layers': list(range(2, 8)),
     'pred_scales': [[1]]*6,
-    'pred_aspect_ratios': [ [[0.66685089, 1.7073535, 0.87508774, 1.16524493, 0.49059086]] ] * 6,
 })
 
 resnet101_dcn_inter3_backbone = resnet101_backbone.copy({
@@ -418,7 +281,6 @@ darknet53_backbone = backbone_base.copy({
 
     'selected_layers': list(range(3, 9)),
     'pred_scales': [[3.5, 4.95], [3.6, 4.90], [3.3, 4.02], [2.7, 3.10], [2.1, 2.37], [1.8, 1.92]],
-    'pred_aspect_ratios': [ [[1, sqrt(2), 1/sqrt(2), sqrt(3), 1/sqrt(3)][:n], [1]] for n in [3, 5, 5, 5, 3, 3] ],
 })
 
 vgg16_arch = [[64, 64],
@@ -439,7 +301,6 @@ vgg16_backbone = backbone_base.copy({
 
     'selected_layers': [3] + list(range(5, 10)),
     'pred_scales': [[5, 4]]*6,
-    'pred_aspect_ratios': [ [[1], [1, sqrt(2), 1/sqrt(2), sqrt(3), 1/sqrt(3)][:n]] for n in [3, 5, 5, 5, 3, 3] ],
 })
 
 
@@ -559,10 +420,8 @@ fpn_base = Config({
 # ----------------------- CONFIG DEFAULTS ----------------------- #
 
 coco_base_config = Config({
-    'dataset': coco2014_dataset,
+    'dataset': coco2017_dataset,
     'num_classes': 81, # This should include the background class
-
-    'max_iter': 400000,
 
     # The maximum number of detections for evaluation
     'max_num_detections': 100,
@@ -812,7 +671,6 @@ yolact_base_config = coco_base_config.copy({
     'use_polygons': False,
     # Training params
     'lr_steps': (280000, 600000, 700000, 750000),
-    'max_iter': 800000,
     
     # Backbone Settings
     'backbone': resnet101_backbone.copy({
@@ -821,7 +679,6 @@ yolact_base_config = coco_base_config.copy({
         'preapply_sqrt': False,
         'use_square_anchors': True, # This is for backward compatability with a bug
 
-        'pred_aspect_ratios': [ [[16, 8, 4, 2, 1, 1/2, 1/4, 1/8, 1/16]] ]*5,
         'pred_scales': [[24], [48], [96], [192], [384]],
     }),
 
@@ -851,69 +708,6 @@ yolact_base_config = coco_base_config.copy({
 })
 
 
-yolact_resnet50_config = yolact_base_config.copy({
-    'name': 'yolact_resnet101',
-
-    'backbone': resnet50_backbone.copy({
-        'selected_layers': list(range(1, 4)),
-        'use_pixel_scales': True,
-        'preapply_sqrt': False,
-        'use_square_anchors': False,
-        'pred_aspect_ratios': [ [[1]] ]*5,
-        'pred_scales': [[24], [48], [96], [192], [384]],
-        'strides': [8, 16, 32, 64, 128],
-        'regress_ranges': ((-1, 64), (64, 128), (128, 256), (256, 512), (512, 1e8)),
-
-    }),
-})
-
-
-yolact_darknet53_config = yolact_base_config.copy({
-    'name': 'yolact_darknet53',
-
-    'backbone': darknet53_backbone.copy({
-        'selected_layers': list(range(2, 5)),
-        
-        'pred_scales': yolact_base_config.backbone.pred_scales,
-        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
-        'use_pixel_scales': True,
-        'preapply_sqrt': False,
-        'use_square_anchors': True, # This is for backward compatability with a bug
-    }),
-})
-
-yolact_resnet101_config = yolact_base_config.copy({
-    'name': 'yolact_resnet101',
-
-    'backbone': resnet101_backbone.copy({
-        'selected_layers': list(range(1, 4)),
-        'use_pixel_scales': True,
-        'preapply_sqrt': False,
-        'use_square_anchors': False,
-        'pred_aspect_ratios': [ [[1]] ]*5,
-        'pred_scales': [[24], [48], [96], [192], [384]],
-        'strides': [8, 16, 32, 64, 128],
-        'regress_ranges': ((-1, 64), (64, 128), (128, 256), (256, 512), (512, 1e8)),
-        
-    }),
-})
-
-
-yolact_resnet50_pascal_config = yolact_resnet50_config.copy({
-    'name': None, # Will default to yolact_resnet50_pascal
-    
-    # Dataset stuff
-    'dataset': pascal_sbd_dataset,
-    'num_classes': len(pascal_sbd_dataset.class_names) + 1,
-
-    'max_iter': 120000,
-    'lr_steps': (60000, 100000),
-    
-    'backbone': yolact_resnet50_config.backbone.copy({
-        'pred_scales': [[32], [64], [128], [256], [512]],
-        'use_square_anchors': False,
-    })
-})
 
 #########################################################################################################################
 
@@ -926,7 +720,6 @@ convexmask_base_config = yolact_base_config.copy({
         'use_pixel_scales': True,
         'preapply_sqrt': False,
         'use_square_anchors': False,
-        'pred_aspect_ratios': [[[1]]]*5,
         'pred_scales': [[24], [48], [96], [192], [384]],
         'strides': [8, 16, 32, 64, 128],
         'regress_ranges': ((-1, 64), (64, 128), (128, 256), (256, 512), (512, 1e8)),
@@ -1035,7 +828,6 @@ convex_coco_focal_101 = convex_coco_focal.copy({
         'use_pixel_scales': True,
         'preapply_sqrt': False,
         'use_square_anchors': False,
-        'pred_aspect_ratios': [ [[1]] ]*5,
         'pred_scales': [[24], [48], [96], [192], [384]],
         'strides': [8, 16, 32, 64, 128],
         'regress_ranges': ((-1, 64), (64, 128), (128, 256), (256, 512), (512, 1e8)),
@@ -1045,7 +837,7 @@ convex_coco_focal_101 = convex_coco_focal.copy({
 
 convex_synthtree_focal = convex_coco_focal.copy({
     'name':'ABLATION_NR_72_k2',
-    'dataset': polar_synthtree43k_dataset_criann,
+    'dataset': synthtree43k_dataset,
     'num_classes': 2,
     'max_size': (1280,720),
     'fixed_size':True,
@@ -1106,7 +898,6 @@ convex_synthtree_focal_101 = convex_synthtree_focal.copy({
         'use_pixel_scales': True,
         'preapply_sqrt': False,
         'use_square_anchors': False,
-        'pred_aspect_ratios': [ [[1]] ]*5,
         'pred_scales': [[24], [48], [96], [192], [384]],
         'strides': [8, 16, 32, 64, 128],
         'regress_ranges': ((-1, 64), (64, 128), (128, 256), (256, 512), (512, 1e8)),
@@ -1177,72 +968,12 @@ convex_synthtree_prediction_101 = convex_synthtree_prediction.copy({
         'use_pixel_scales': True,
         'preapply_sqrt': False,
         'use_square_anchors': False,
-        'pred_aspect_ratios': [ [[1]] ]*5,
         'pred_scales': [[24], [48], [96], [192], [384]],
         'strides': [8, 16, 32, 64, 128],
         'regress_ranges': ((-1, 64), (64, 128), (128, 256), (256, 512), (512, 1e8)),
     })
 
     
-})
-
-
-convex_synthtree_refined = convex_synthtree_prediction.copy({
-    'name':'ALBU_1e3_refined',
-    'dataset': polar_synthtree43k_dataset_criann_refined, 
-})
-
-canatree_focal = convex_synthtree_focal.copy({
-    'name':'canatree_no_pretrain',
-
-    'epochs':100,
-    'batch_size':4,
-    'lr':1e-2,
-    'lr_steps':(50,75,90),
-    'dataset':canatree_dataset,
-
-    'augment_random_mirror': False,
-
-})
-
-
-
-# ----------------------- YOLACT++ CONFIGS ----------------------- #
-
-yolact_plus_base_config = yolact_base_config.copy({
-    'name': 'yolact_plus_base',
-
-    'backbone': resnet101_dcn_inter3_backbone.copy({
-        'selected_layers': list(range(1, 4)),
-        
-        'pred_aspect_ratios': [ [[1, 1/2, 2]] ]*5,
-        'pred_scales': [[i * 2 ** (j / 3.0) for j in range(3)] for i in [24, 48, 96, 192, 384]],
-        'use_pixel_scales': True,
-        'preapply_sqrt': False,
-        'use_square_anchors': False,
-    }),
-
-    'use_maskiou': True,
-    'maskiou_net': [(8, 3, {'stride': 2}), (16, 3, {'stride': 2}), (32, 3, {'stride': 2}), (64, 3, {'stride': 2}), (128, 3, {'stride': 2})],
-    'maskiou_alpha': 25,
-    'rescore_bbox': False,
-    'rescore_mask': True,
-
-    'discard_mask_area': 5*5,
-})
-
-yolact_plus_resnet50_config = yolact_plus_base_config.copy({
-    'name': 'yolact_plus_resnet50',
-
-    'backbone': resnet50_dcnv2_backbone.copy({
-        'selected_layers': list(range(1, 4)),
-        
-        'pred_aspect_ratios': [ [[1, 1/2, 2]] ]*5,
-        'pred_scales': [[i * 2 ** (j / 3.0) for j in range(3)] for i in [24, 48, 96, 192, 384]],
-        'use_pixel_scales': True,
-        'preapply_sqrt': False,
-        'use_square_anchors': False,
-    }),
 })
 
 

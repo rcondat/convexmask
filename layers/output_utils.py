@@ -11,11 +11,11 @@ import os
 from data import cfg, mask_type, MEANS, STD, activation_func
 from utils.augmentations import Resize
 from utils import timer
-from .box_utils import crop, sanitize_coordinates
-from .polar_utils import polar2mask, polar2poly, poly2bbox, get_convex_rays, detect_convex_indices
+from .box_utils import sanitize_coordinates
+from .polar_utils import polar2mask, polar2poly, polar2convex
 
 def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
-                visualize_lincomb=False, crop_masks=True, score_threshold=0, output_mask_poly=False, convex_poly=False):
+                visualize_lincomb=False, score_threshold=0, output_mask_poly=False, convex_poly=False):
     """
     Postprocesses the output of Yolact on testing mode into a format that makes sense,
     accounting for all the possible configuration settings.
@@ -65,7 +65,6 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
     scores  = dets['score']
     masks   = dets['mask']
     polygons = dets['polygons']
-    #convex_polygons = dets['convex_polygons']
     centers = dets['points']
     center_scores = dets['centerness']
 
@@ -94,31 +93,18 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
         mask_h,mask_w,_ = masks.shape
 
         crop_poly = polar2mask(centers, polygons * (1+cfg.extend_factor), (mask_w, mask_h))
-        #crop_poly = polar2mask(centers, convex_polygons * cfg.extend_factor, (mask_w, mask_h))
 
         if convex_poly:
-            polygons=get_convex_rays(polygons, detect_convex_indices(polygons))
+            polygons=polar2convex(polygons)
 
         if output_mask_poly:
             masks_poly = polar2mask(centers, polygons, (mask_w, mask_h))
         
-        #convex_poly_coords = polar2poly(centers, convex_polygons)
         poly_coords = polar2poly(centers, polygons)
         poly_coords /= torch.Tensor([_w,_h]) # Remove padding
         poly_coords *= torch.Tensor([w,h])
 
         # Crop masks before upsampling because you know why
-        #masks[torch.logical_not(masks_convex_poly)] = 0
-        """
-        print(masks.shape)
-        os.makedirs('/save/2017018/rconda01/proto_masks/',exist_ok=True)
-        for i in range(masks.shape[2]):
-            m = masks[...,i].cpu().numpy()
-            print(m.dtype)
-            print(np.max(m))
-            print(cv2.imwrite('/save/2017018/rconda01/proto_masks/{}.png'.format(i),(m*255).astype(np.uint8)))
-        exit()
-        """
         masks *= crop_poly
 
         # Permute into the correct output shape [num_dets, proto_h, proto_w]
@@ -138,7 +124,6 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
                             scores = [scores, scores * maskiou_p]
 
         # Scale masks up to the full image
-        #masks = F.interpolate(masks.unsqueeze(0), (h, w), mode=interpolation_mode, align_corners=False).squeeze(0)
         masks = F.interpolate(masks.unsqueeze(0), (int(h/_h), int(w/_w)), mode=interpolation_mode, align_corners=False).squeeze(0)
         masks = masks[:,:h,:w]
         if output_mask_poly:
@@ -156,13 +141,6 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
     boxes[:, 1], boxes[:, 3] = sanitize_coordinates(boxes[:, 1], boxes[:, 3], h, cast=False)
     boxes = boxes.long()
     if cfg.extend_factor!=0:
-        """
-        decoded_polygons = polar2poly(centers,polygons.clone()*(1-cfg.extend_factor))
-        boxes_minus = poly2bbox(decoded_polygons)
-        boxes_minus[:, 0], boxes_minus[:, 2] = sanitize_coordinates(boxes_minus[:, 0], boxes_minus[:, 2], w, cast=False)
-        boxes_minus[:, 1], boxes_minus[:, 3] = sanitize_coordinates(boxes_minus[:, 1], boxes_minus[:, 3], h, cast=False)
-        boxes_minus = boxes_minus.long()
-        """
         # Tentative boxes_minus + rapide
         profile_x = masks.any(dim=1).int()
         profile_y = masks.any(dim=2).int()
@@ -255,9 +233,6 @@ def display_lincomb(proto_data, masks):
                 arr_run[y*proto_h:(y+1)*proto_h, x*proto_w:(x+1)*proto_w] = (running_total_nonlin > 0.5).astype(np.float)
         plt.imshow(arr_img)
         plt.show()
-        # plt.imshow(arr_run)
-        # plt.show()
-        # plt.imshow(test)
-        # plt.show()
+
         plt.imshow(out_masks[:, :, jdx].cpu().numpy())
         plt.show()

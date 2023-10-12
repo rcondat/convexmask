@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
-from ..box_utils import decode, jaccard, index2d
-from ..polar_utils import poly2bbox, polar2poly, get_convex_rays, detect_convex_indices, poly2polar, polar2mask, poly_iou, box_poly_iou
+from ..box_utils import jaccard
+from ..polar_utils import poly2bbox, polar2poly, polar2mask, poly_iou
 from utils import timer
 import time
 from data import cfg, mask_type
@@ -74,24 +74,9 @@ class Detect(object):
 
             for batch_idx in range(batch_size):
                 # Replace decoded boxes by polygon reconstruction
-
-                # For future NMS with polygons
-                """
-                decoded_convex_indices = detect_convex_points(poly_data[batch_idx])
-                decoded_convex_polygons = get_convex_rays(poly_data[batch_idx],decoded_convex_indices)
-                """
-
                 decoded_polygons = polar2poly(points_data, poly_data[batch_idx].clone()) #, self.angles)
                 decoded_boxes = poly2bbox(decoded_polygons)
                 result = self.detect(batch_idx, conf_preds, decoded_boxes, mask_data, inst_data, center_preds, poly_data[batch_idx], points_data)
-                # Postprocess polygons to get convex polygons (new key)
-                #if result is not None:
-                #  polar_polygons = result['polygons'] # polar format
-                #  convex_indices = detect_convex_indices(polar_polygons.clone())
-                #  convex_polygons = get_convex_rays(polar_polygons.clone(), convex_indices)
-
-                #  result['convex_polygons'] = convex_polygons
-
 
                 if result is not None and proto_data is not None:
                     result['proto'] = proto_data[batch_idx]
@@ -188,7 +173,7 @@ class Detect(object):
         # Polygon NMS
         # Create poly_masks
         if cfg.nms_poly:
-            iou = box_poly_iou(boxes,polygons,points,R=72,idx=idx)
+            iou = poly_iou(boxes,polygons,points,R=72,idx=idx,box_iou_thresh=0.05)
             iou = iou + iou.transpose(0,1)
         else:
             iou = jaccard(boxes[None,...], boxes[None,...])[0]

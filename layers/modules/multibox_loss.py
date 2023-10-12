@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from ..box_utils import match, log_sum_exp, decode, center_size, crop, elemwise_mask_iou, elemwise_box_iou, crop_amp
-from ..polar_utils import polar_target, detect_convex_indices, detect_convex_points, get_convex_rays, crop_boxes, polar2mask
+from ..box_utils import log_sum_exp, decode, elemwise_box_iou
+from ..polar_utils import polar_target, detect_convex_indices, polar2mask
 from data import cfg, mask_type, activation_func
 import math
 import cv2
@@ -85,7 +85,6 @@ class MultiBoxLoss(nn.Module):
         poly_data = predictions['polygon']
         points = predictions['points']
         regress_ranges = predictions['regress_ranges']
-        num_points_per_level = predictions['num_points']
         img_size = predictions['img_size']
         if cfg.mask_type == mask_type.lincomb:
             proto_data = predictions['proto']
@@ -96,11 +95,9 @@ class MultiBoxLoss(nn.Module):
         labels = [None] * len(targets) # Used in sem segm loss
 
         batch_size = conf_data.size(0)
-        num_points = points.size(0)
         num_rays = poly_data.size(2)
         num_classes = self.num_classes
         
-        masks_shape = [m.shape[0] for m in masks]
  
         # Match points (default boxes) and ground truth boxes
         # These tensors will be created with the same device as conf_data
@@ -128,7 +125,7 @@ class MultiBoxLoss(nn.Module):
                 _, polygons[idx] = split(polygons[idx])
             else:
                 crowd_boxes = None
-        bs_targets = [polar_target(truths[idx], polygons[idx], labels[idx], points, regress_ranges, num_rays, num_points_per_level, img_size, crowd_boxes, cfg.inside_polygon, cfg.radius, cfg.force_gt_attribute) for idx in range(batch_size)]
+        bs_targets = [polar_target(truths[idx], polygons[idx], labels[idx], points, regress_ranges, num_rays, img_size, crowd_boxes, cfg.radius, cfg.force_gt_attribute) for idx in range(batch_size)]
 
         conf_t = Variable(torch.stack([bs_t[0] for bs_t in bs_targets],dim=0),requires_grad=False)
         loc_t = Variable(torch.stack([bs_t[1] for bs_t in bs_targets],dim=0),requires_grad=False)
@@ -403,8 +400,8 @@ class MultiBoxLoss(nn.Module):
         Adapted from https://github.com/clcarwin/focal_loss_pytorch/blob/master/focalloss.py
         Note that this uses softmax and not the original sigmoid from the paper.
         """
-        conf_t = conf_t.view(-1) # [batch_size*num_priors]
-        conf_data = conf_data.view(-1, conf_data.size(-1)) # [batch_size*num_priors, num_classes]
+        conf_t = conf_t.view(-1) # [batch_size]
+        conf_data = conf_data.view(-1, conf_data.size(-1)) # [batch_size, num_classes]
 
         # Ignore neutral samples (class < 0)
         keep = (conf_t >= 0).float()
@@ -435,8 +432,8 @@ class MultiBoxLoss(nn.Module):
         """
         num_classes = conf_data.size(-1)
 
-        conf_t = conf_t.view(-1) # [batch_size*num_priors]
-        conf_data = conf_data.view(-1, num_classes) # [batch_size*num_priors, num_classes]
+        conf_t = conf_t.view(-1) # [batch_size]
+        conf_data = conf_data.view(-1, num_classes) # [batch_size, num_classes]
 
         # Ignore neutral samples (class < 0)
         keep = (conf_t >= 0).float()
@@ -467,8 +464,8 @@ class MultiBoxLoss(nn.Module):
         similar during test-time to softmax by setting class[1:] = softmax(class[1:]) * class[0] and invert class[0].
         """
 
-        conf_t = conf_t.view(-1) # [batch_size*num_priors]
-        conf_data = conf_data.view(-1, conf_data.size(-1)) # [batch_size*num_priors, num_classes]
+        conf_t = conf_t.view(-1) # [batch_size]
+        conf_data = conf_data.view(-1, conf_data.size(-1)) # [batch_size, num_classes]
 
         # Ignore neutral samples (class < 0)
         keep = (conf_t >= 0).float()
@@ -497,8 +494,8 @@ class MultiBoxLoss(nn.Module):
         Then for the rest of the classes, softmax them and apply CE for only the positive examples.
         """
 
-        conf_t = conf_t.view(-1) # [batch_size*num_priors]
-        conf_data = conf_data.view(-1, conf_data.size(-1)) # [batch_size*num_priors, num_classes]
+        conf_t = conf_t.view(-1) # [batch_size]
+        conf_data = conf_data.view(-1, conf_data.size(-1)) # [batch_size, num_classes]
 
         pos_mask = (conf_t > 0)
         neg_mask = (conf_t == 0)
@@ -538,7 +535,7 @@ class MultiBoxLoss(nn.Module):
                 cur_pos_idx = pos_idx[idx, :, :]
                 cur_pos_idx_squeezed = cur_pos_idx[:, 1]
 
-                # Shape: [num_priors, 4], decoded predicted bboxes
+                # Shape: [1, 4], decoded predicted bboxes
                 pos_bboxes = decode(loc_data[idx, :, :], priors.data, cfg.use_yolo_regressors)
                 pos_bboxes = pos_bboxes[cur_pos_idx].view(-1, 4).clamp(0, 1)
                 pos_lookup = idx_t[idx, cur_pos_idx_squeezed]

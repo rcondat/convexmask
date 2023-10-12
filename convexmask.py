@@ -22,11 +22,7 @@ import numpy as np
 from data.config import MEANS, STD
 import cv2
 
-# This is required for Pytorch 1.0.1 on Windows to initialize Cuda on some driver versions.
-# See the bug report here: https://github.com/pytorch/pytorch/issues/17108
 torch.cuda.current_device()
-
-# As of March 10, 2019, Pytorch DataParallel still doesn't support JIT Script Modules
 use_jit = torch.cuda.device_count() <= 1
 if not use_jit:
     print('Multiple GPUs detected! Turning off JIT.')
@@ -39,19 +35,12 @@ prior_cache = defaultdict(lambda: None)
 
 class PredictionModule(nn.Module):
     """
-    The (c) prediction module adapted from DSSD:
-    https://arxiv.org/pdf/1701.06659.pdf
-
-    Note that this is slightly different to the module in the paper
-    because the Bottleneck block actually has a 3x3 convolution in
-    the middle instead of a 1x1 convolution. Though, I really can't
-    be arsed to implement it myself, and, who knows, this might be
-    better.
-
+    ConvexMask prediction module. 
+    Contrary to traditionnal object detectors, ConvexMask predicts a convex exterior polygon instead of a bounding box.
+    
     Args:
         - in_channels:   The input feature size.
         - out_channels:  The output feature size (must be a multiple of 4).
-        - aspect_ratios: A list of lists of priorbox aspect ratios (one list per scale).
         - scales:        A list of priorbox scales relative to this layer's convsize.
                          For instance: If this layer has convouts of size 30x30 for
                                        an image of size 600x600, the 'default' (scale
@@ -63,18 +52,17 @@ class PredictionModule(nn.Module):
                          from parent instead of from this module.
     """
     
-    def __init__(self, in_channels, out_channels=1024, aspect_ratios=[[1]], scales=[1], stride=1, parent=None, index=0, regress_ranges = (0,0)):
+    def __init__(self, in_channels, out_channels=1024, scales=[1], stride=1, parent=None, index=0, regress_ranges = (0,0)):
         super().__init__()
         
         self.num_classes = cfg.num_classes
         self.mask_dim    = cfg.mask_dim # Defined by Yolact
-        self.num_priors  = sum(len(x)*len(scales) for x in aspect_ratios)
         self.parent      = [parent] # Don't include this in the state dict
         self.index       = index
         self.num_heads   = cfg.num_heads # Defined by Yolact
         self.stride      = stride
         self.num_rays    = cfg.num_rays
-        self.regress_ranges = [i*cfg.regress_factor for i in regress_ranges] #regress_ranges ###############################
+        self.regress_ranges = [i*cfg.regress_factor for i in regress_ranges] 
         self.ratio_distances = cfg.ratio_distances
 
         if cfg.mask_proto_split_prototypes_by_head and cfg.mask_type == mask_type.lincomb:
@@ -94,16 +82,16 @@ class PredictionModule(nn.Module):
                 self.conv = nn.Conv2d(out_channels, out_channels, kernel_size=1, bias=True)
                 self.bn = nn.BatchNorm2d(out_channels)
 
-            self.conf_layer = nn.Conv2d(out_channels, self.num_priors * self.num_classes, **cfg.head_layer_params) # Classification
-            self.center_layer = nn.Conv2d(out_channels, self.num_priors, **cfg.head_layer_params) # Centerness
-            self.polygon_layer = nn.Conv2d(out_channels, self.num_priors * self.num_rays, **cfg.head_layer_params) # Polygon
-            self.mask_layer = nn.Conv2d(out_channels, self.num_priors * self.mask_dim,    **cfg.head_layer_params) # Mask Segmentation
+            self.conf_layer = nn.Conv2d(out_channels, self.num_classes, **cfg.head_layer_params) # Classification
+            self.center_layer = nn.Conv2d(out_channels, 1, **cfg.head_layer_params) # Centerness
+            self.polygon_layer = nn.Conv2d(out_channels, self.num_rays, **cfg.head_layer_params) # Polygon
+            self.mask_layer = nn.Conv2d(out_channels, self.mask_dim,    **cfg.head_layer_params) # Mask Segmentation
             
             if cfg.use_mask_scoring:
-                self.score_layer = nn.Conv2d(out_channels, self.num_priors, **cfg.head_layer_params)
+                self.score_layer = nn.Conv2d(out_channels, 1, **cfg.head_layer_params)
 
             if cfg.use_instance_coeff:
-                self.inst_layer = nn.Conv2d(out_channels, self.num_priors * cfg.num_instance_coeffs, **cfg.head_layer_params)
+                self.inst_layer = nn.Conv2d(out_channels, cfg.num_instance_coeffs, **cfg.head_layer_params)
             
             # What is this ugly lambda doing in the middle of all this clean prediction module code?
             def make_extra(num_layers):
@@ -119,9 +107,8 @@ class PredictionModule(nn.Module):
             self.conf_extra, self.poly_extra, self.mask_extra = [make_extra(x) for x in cfg.extra_layers]
             
             if cfg.mask_type == mask_type.lincomb and cfg.mask_proto_coeff_gate:
-                self.gate_layer = nn.Conv2d(out_channels, self.num_priors * self.mask_dim, kernel_size=3, padding=1)
+                self.gate_layer = nn.Conv2d(out_channels, self.mask_dim, kernel_size=3, padding=1)
 
-        self.aspect_ratios = aspect_ratios
         self.scales = scales
 
         self.priors = None
@@ -135,11 +122,11 @@ class PredictionModule(nn.Module):
                  Size: [batch_size, in_channels, conv_h, conv_w])
 
         Returns a tuple (class_confs, centerness, polygons_rays, mask_output, prior_boxes) with sizes
-            - class_confs: [batch_size, conv_h*conv_w*num_priors, num_classes]
-            - centerness: [batch_size, conv_h*conv_w*num_priors, 1]
-            - polygons_rays: [batch_size, conv_h*conv_w*num_priors, num_rays]
-            - mask_output: [batch_size, conv_h*conv_w*num_priors, mask_dim]
-            - prior_boxes: [conv_h*conv_w*num_priors, 4]
+            - class_confs: [batch_size, conv_h*conv_w, num_classes]
+            - centerness: [batch_size, conv_h*conv_w, 1]
+            - polygons_rays: [batch_size, conv_h*conv_w, num_rays]
+            - mask_output: [batch_size, conv_h*conv_w, mask_dim]
+            - prior_boxes: [conv_h*conv_w, 4]
         """
         # In case we want to use another module's layers
         src = self if self.parent[0] is None else self.parent[0]
@@ -203,7 +190,7 @@ class PredictionModule(nn.Module):
             center = torch.ones_like(center)
 
         preds = {'conf': conf, 'center': center, 'polygon': polygon, 'mask': mask, 'points': points, 
-                 'num_points':points.size(0), 'regress_ranges': regress_ranges} 
+                 'regress_ranges': regress_ranges} 
 
         if cfg.use_mask_scoring:
             preds['score'] = score
@@ -350,7 +337,7 @@ class ConvexMask(nn.Module):
     Parameters (in cfg.backbone):
         - selected_layers: The indices of the conv layers to use for prediction.
         - pred_scales:     A list with len(selected_layers) containing tuples of scales (see PredictionModule)
-        - pred_aspect_ratios: A list of lists of aspect ratios with len(selected_layers) (see PredictionModule)
+        A list of lists of aspect ratios with len(selected_layers) (see PredictionModule)
     """
 
     def __init__(self):
@@ -412,7 +399,6 @@ class ConvexMask(nn.Module):
                 parent = self.prediction_layers[0]
 
             pred = PredictionModule(src_channels[layer_idx], src_channels[layer_idx],
-                                    aspect_ratios = cfg.backbone.pred_aspect_ratios[idx],
                                     scales        = cfg.backbone.pred_scales[idx],
                                     stride        = cfg.backbone.strides[idx],
                                     parent        = parent,
@@ -624,7 +610,7 @@ class ConvexMask(nn.Module):
 
 
         with timer.env('pred_heads'):
-            pred_outs = {'conf': [], 'center': [], 'polygon': [], 'mask': [], 'points': [], 'num_points': [], 'regress_ranges': []} 
+            pred_outs = {'conf': [], 'center': [], 'polygon': [], 'mask': [], 'points': [], 'regress_ranges': []} 
             if cfg.use_mask_scoring:
                 pred_outs['score'] = []
 
