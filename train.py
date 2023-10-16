@@ -135,7 +135,7 @@ if cfg.batch_size // torch.cuda.device_count() < 6:
         print('Per-GPU batch size is less than the recommended limit for batch norm. Disabling batch norm.')
     cfg.freeze_bn = True
 
-loss_types = ['C', 'M', 'P', 'N', 'D', 'E', 'K', 'S', 'I', 'R', 'X']
+loss_types = ['C', 'M', 'P', 'N', 'D', 'E', 'K', 'S', 'I', 'X']
 
 if torch.cuda.is_available():
     if args.cuda:
@@ -260,8 +260,6 @@ def train():
 
     criterion = MultiBoxLoss(num_classes=cfg.num_classes,
                                   num_rays=cfg.num_rays,
-                                  pos_threshold=cfg.positive_iou_threshold,
-                                  neg_threshold=cfg.negative_iou_threshold,
                                   negpos_ratio=cfg.ohem_negpos_ratio)
 
     print("POLAR MULTIBOX LOSS CREATED")
@@ -340,42 +338,6 @@ def train():
             set_lr(optimizer, args.lr * (args.gamma ** step_index))
         #'''        
         for datum in data_loader:
-            """
-            path = '/home/2017018/rconda01/visu/'
-            os.makedirs(path,exist_ok=True)
-            images = datum[0]
-            os.makedirs(path+'images/',exist_ok=True)
-            for i,img in enumerate(images):
-                t = img.moveaxis(0,2).cpu().numpy()[...,[2,1,0]]
-                mean = np.tile(MEANS, (t.shape[0], t.shape[1], 1)).astype(np.float32)
-                std = np.tile(STD, (t.shape[0], t.shape[1], 1)).astype(np.float32)
-                t = ((t * std)+mean).astype(np.uint8)
-                cv2.imwrite(path+'images/{}.png'.format(i),t)
-            
-            masks = datum[1][1]
-            os.makedirs(path+'masks/',exist_ok=True)
-            for i,mask in enumerate(masks):
-                for j in range(mask.shape[0]):
-                    t = mask[j].cpu().numpy()
-                    cv2.imwrite(path+'masks/{}_{}.png'.format(i,j),t)
-
-            exit()
-            """
-
-            # Change a config setting if we've reached the specified iteration
-            changed = False
-            for change in cfg.delayed_settings:
-                if iteration >= change[0]:
-                    changed = True
-                    cfg.replace(change[1])
-
-                    # Reset the loss averages because things might have changed
-                    for avg in loss_avgs:
-                        avg.reset()
-                
-            # If a config setting was changed, remove it from the list so we don't keep checking
-            if changed:
-                cfg.delayed_settings = [x for x in cfg.delayed_settings if x[0] > iteration]
 
             # Warm up by linearly interpolating the learning rate from some smaller value
             if cfg.lr_warmup_until > 0 and iteration <= cfg.lr_warmup_until:
@@ -394,7 +356,7 @@ def train():
                 losses = net(datum)
                 
             losses = { k: (v).mean() for k,v in losses.items() } # Mean here because Dataparallel
-            loss = sum([losses[k] for k in losses if k != 'R'])
+            loss = sum([losses[k] for k in losses])
             
 
             # Backprop
@@ -417,7 +379,7 @@ def train():
             if iteration % args.log_iter == 0:
                 eta_str = str(datetime.timedelta(seconds=(num_iterations-iteration) * time_avg.get_avg())).split('.')[0]
                     
-                total = sum([loss_avgs[k].get_avg() for k in losses if k!= 'R'])
+                total = sum([loss_avgs[k].get_avg() for k in losses])
                 loss_labels = sum([[k, loss_avgs[k].get_avg()] for k in loss_types if k in losses], [])
                     
                 print(('[%3d] %7d ||' + (' %s: %.3f |' * len(losses)) + ' T: %.3f || ETA: %s || timer: %.3f')
@@ -442,7 +404,7 @@ def train():
         for k,v in all_losses.items():
             if len(v)!=0:
                 mean_train_losses[k] = np.mean(v)
-        mean_train_losses['T'] =  sum([mean_train_losses[k] for k in losses if k != 'R'])
+        mean_train_losses['T'] =  sum([mean_train_losses[k] for k in losses])
 
         # TB LOG
         for k,v in mean_train_losses.items():
@@ -460,7 +422,7 @@ def train():
                     losses = net(datum)
 
             losses = { k: (v).mean() for k,v in losses.items() } # Mean here because Dataparallel
-            loss = sum([losses[k] for k in losses if k!= 'R'])
+            loss = sum([losses[k] for k in losses])
 
             for k in losses:
                 val_losses[k].append(losses[k].item())
@@ -469,7 +431,7 @@ def train():
         for k,v in val_losses.items():
             if len(v) !=0:
                mean_val_losses[k] = np.mean(v)
-        mean_val_losses['T'] = sum([mean_val_losses[k] for k in mean_val_losses if k!= 'R'])
+        mean_val_losses['T'] = sum([mean_val_losses[k] for k in mean_val_losses])
         for k,v in mean_val_losses.items():
             print('{}: {:.3f}'.format(k,v))
             tb_log.add_scalar('val/'+k,v, epoch)

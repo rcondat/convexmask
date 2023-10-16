@@ -4,18 +4,6 @@ from utils import timer
 
 from data import cfg
 
-@torch.jit.script
-def point_form(boxes):
-    """ Convert prior_boxes to (xmin, ymin, xmax, ymax)
-    representation for comparison to point form ground truth data.
-    Args:
-        boxes: (tensor) center-size default boxes from priorbox layers.
-    Return:
-        boxes: (tensor) Converted xmin, ymin, xmax, ymax form of boxes.
-    """
-    return torch.cat((boxes[:, :2] - boxes[:, 2:]/2,     # xmin, ymin
-                     boxes[:, :2] + boxes[:, 2:]/2), 1)  # xmax, ymax
-
 #@torch.jit.script
 def intersect(box_a, box_b):
     """ We resize both tensors to [A,B,2] without new malloc:
@@ -66,22 +54,6 @@ def jaccard(box_a, box_b, iscrowd:bool=False):
     out = inter / area_a if iscrowd else inter / union
     return out if use_batch else out.squeeze(0)
 
-def elemwise_box_iou(box_a, box_b):
-    """ Does the same as above but instead of pairwise, elementwise along the inner dimension. """
-    max_xy = torch.min(box_a[:, 2:], box_b[:, 2:])
-    min_xy = torch.max(box_a[:, :2], box_b[:, :2])
-    inter = torch.clamp((max_xy - min_xy), min=0)
-    inter = inter[:, 0] * inter[:, 1]
-
-    area_a = (box_a[:, 2] - box_a[:, 0]) * (box_a[:, 3] - box_a[:, 1])
-    area_b = (box_b[:, 2] - box_b[:, 0]) * (box_b[:, 3] - box_b[:, 1])
-
-    union = area_a + area_b - inter
-    union = torch.clamp(union, min=0.1)
-
-    # Return value is [n] for inputs [n, 4]
-    return torch.clamp(inter / union, max=1)
-
 def mask_iou(masks_a, masks_b, iscrowd=False):
     """
     Computes the pariwise mask IoU between two sets of masks of size [a, h, w] and [b, h, w].
@@ -98,54 +70,6 @@ def mask_iou(masks_a, masks_b, iscrowd=False):
     area_b = masks_b.sum(dim=1).unsqueeze(0)
 
     return intersection / (area_a + area_b - intersection) if not iscrowd else intersection / area_a
-
-@torch.jit.script
-def decode(loc, priors, use_yolo_regressors:bool=False):
-    """
-    Decode predicted bbox coordinates using the same scheme
-    employed by Yolov2: https://arxiv.org/pdf/1612.08242.pdf
-
-        b_x = (sigmoid(pred_x) - .5) / conv_w + prior_x
-        b_y = (sigmoid(pred_y) - .5) / conv_h + prior_y
-        b_w = prior_w * exp(loc_w)
-        b_h = prior_h * exp(loc_h)
-    
-    Note that loc is inputed as [(s(x)-.5)/conv_w, (s(y)-.5)/conv_h, w, h]
-    while priors are inputed as [x, y, w, h] where each coordinate
-    is relative to size of the image (even sigmoid(x)). We do this
-    in the network by dividing by the 'cell size', which is just
-    the size of the convouts.
-    
-    Also note that prior_x and prior_y are center coordinates which
-    is why we have to subtract .5 from sigmoid(pred_x and pred_y).
-    
-    Args:
-        - loc:    The predicted bounding boxes of size [num_priors, 4]
-        - priors: The priorbox coords with size [num_priors, 4]
-    
-    Returns: A tensor of decoded relative coordinates in point form 
-             form with size [num_priors, 4]
-    """
-
-    if use_yolo_regressors:
-        # Decoded boxes in center-size notation
-        boxes = torch.cat((
-            loc[:, :2] + priors[:, :2],
-            priors[:, 2:] * torch.exp(loc[:, 2:])
-        ), 1)
-
-        boxes = point_form(boxes)
-    else:
-        variances = [0.1, 0.2]
-        
-        boxes = torch.cat((
-            priors[:, :2] + loc[:, :2] * variances[0] * priors[:, 2:],
-            priors[:, 2:] * torch.exp(loc[:, 2:] * variances[1])), 1)
-        boxes[:, :2] -= boxes[:, 2:] / 2
-        boxes[:, 2:] += boxes[:, :2]
-    
-    return boxes
-
 
 
 def log_sum_exp(x):

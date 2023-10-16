@@ -108,13 +108,10 @@ class ToPercentCoords(object):
         return image, masks, boxes, polygons, labels, times
 
 class GeneratePolygons(object):
-    def __init__(self,use_polygons,return_convex=True):
-        self.use_polygons = use_polygons
+    def __init__(self,return_convex=True):
         self.return_convex=return_convex
 
     def __call__(self, image, masks=None, boxes=None, polygons=None, labels=None, times=None):
-        if not self.use_polygons:
-            return image, masks, boxes, polygons, labels, times
         _, height, width  = masks.shape
         num_annots = masks.shape[0]
         num_crowds = labels['num_crowds']
@@ -269,7 +266,6 @@ class RandomChoiceResize(object):
         
 
 class Resize(object):
-    """ If preserve_aspect_ratio is true, this resizes to an approximate area of max_size * max_size """
 
     @staticmethod
     def calc_size_preserve_ar(img_w, img_h, max_size):
@@ -290,7 +286,6 @@ class Resize(object):
     def __init__(self, max_shape, resize_gt=True):
         self.resize_gt = resize_gt
         self.max_shape = max_shape
-        self.keep_ratio = cfg.preserve_aspect_ratio
 
     def __call__(self, image, masks, boxes, polygons=None, labels=None, times=None, target_shape=None):
 
@@ -727,43 +722,6 @@ class PhotometricDistort(object):
         im, masks, boxes, polygons, labels, times = distort(im, masks, boxes, polygons, labels, times)
         return self.rand_light_noise(im, masks, boxes, polygons, labels, times)
 
-class PrepareMasks(object):
-    """
-    Prepares the gt masks for use_gt_bboxes by cropping with the gt box
-    and downsampling the resulting mask to mask_size, mask_size. This
-    function doesn't do anything if cfg.use_gt_bboxes is False.
-    """
-
-    def __init__(self, mask_size, use_gt_bboxes):
-        self.mask_size = mask_size
-        self.use_gt_bboxes = use_gt_bboxes
-        
-    def __call__(self, image, masks, boxes, polygons=None, labels=None,times=None):
-        if not self.use_gt_bboxes:
-            return image, masks, boxes, polygons, labels, times
-        
-        height, width, _ = image.shape
-
-        new_masks = np.zeros((masks.shape[0], self.mask_size ** 2))
-        
-        for i in range(len(masks)):
-            x1, y1, x2, y2 = boxes[i, :]
-            x1 *= width
-            x2 *= width
-            y1 *= height
-            y2 *= height
-            x1, y1, x2, y2 = (int(x1), int(y1), int(x2), int(y2))
-
-            # +1 So that if y1=10.6 and y2=10.9 we still have a bounding box
-            cropped_mask = masks[i, y1:(y2+1), x1:(x2+1)]
-            scaled_mask = cv2.resize(cropped_mask, (self.mask_size, self.mask_size))
-
-            new_masks[i, :] = scaled_mask.reshape(1, -1)
-
-        # Binarize
-        new_masks[new_masks >  0.5] = 1
-        new_masks[new_masks <= 0.5] = 0
-        return image, new_masks, boxes, polygons, labels, times
 
 class BackboneTransform(object):
     """
@@ -810,7 +768,7 @@ class BaseTransform(object):
             Resize(cfg.max_size, resize_gt=resize_gt),
             enable_if(not cfg.fixed_size, Pad(cfg.max_size, mean, pad_gt=resize_gt)),
             enable_if(resize_gt,ToPercentCoords()),
-            GeneratePolygons(cfg.use_polygons),
+            GeneratePolygons(),
             BackboneTransform(cfg.backbone.transform, mean, std, 'BGR',cfg.max_size)
         ])
 
@@ -838,7 +796,6 @@ class FastBaseTransform(torch.nn.Module):
         self.std  = self.std.to(img.device)
          
         # img assumed to be a pytorch BGR image with channel order [n, h, w, c]
-        #if cfg.preserve_aspect_ratio:
         _, h, w, _ = img.size()
         img_size = Resize.calc_rescale((w, h), cfg.max_size)
         img_size = (img_size[1], img_size[0]) # Pytorch needs h, w
@@ -892,8 +849,7 @@ class SSDAugmentation(object):
             enable_if(not cfg.augment_resize,Resize(cfg.max_size)),
             enable_if(not cfg.fixed_size, Pad(cfg.max_size, mean)),
             ToPercentCoords(),
-            GeneratePolygons(cfg.use_polygons), #,return_convex=False),
-            PrepareMasks(cfg.mask_size, cfg.use_gt_bboxes),
+            GeneratePolygons(), 
             BackboneTransform(cfg.backbone.transform, mean, std, 'BGR',cfg.max_size)
         ])
 

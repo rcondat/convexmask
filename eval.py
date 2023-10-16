@@ -55,10 +55,6 @@ def parse_args(argv=None):
                         help='Further restrict the number of predictions to parse')
     parser.add_argument('--cuda', default=True, type=str2bool,
                         help='Use cuda to evaulate model')
-    parser.add_argument('--fast_nms', default=True, type=str2bool,
-                        help='Whether to use a faster, but not entirely correct version of NMS.')
-    parser.add_argument('--cross_class_nms', default=False, type=str2bool,
-                        help='Whether compute NMS cross-class or per-class.')
     parser.add_argument('--display_masks', default=True, type=str2bool,
                         help='Whether or not to display masks over bounding boxes')
     parser.add_argument('--display_bboxes', default=True, type=str2bool,
@@ -94,7 +90,7 @@ def parse_args(argv=None):
     parser.add_argument('--no_bar', dest='no_bar', action='store_true',
                         help='Do not output the status bar. This is useful for when piping to a file.')
     parser.add_argument('--display_lincomb', default=False, type=str2bool,
-                        help='If the config uses lincomb masks, output a visualization of how those masks are created.')
+                        help='Output a visualization of how those masks are created.')
     parser.add_argument('--benchmark', default=False, dest='benchmark', action='store_true',
                         help='Equivalent to running display mode but without displaying an image.')
     parser.add_argument('--no_sort', default=False, dest='no_sort', action='store_true',
@@ -158,12 +154,9 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
     
 
     with timer.env('Postprocess'):
-        save = cfg.rescore_bbox
-        cfg.rescore_bbox = True
         t = postprocess(dets_out, w, h, visualize_lincomb = args.display_lincomb,
                                         score_threshold   = args.score_threshold,
                                         convex_poly       = args.convex_poly)
-        cfg.rescore_bbox = save
 
     with timer.env('Copy'):
         idx = t[1].argsort(0, descending=True)[:args.top_k]
@@ -972,8 +965,6 @@ def evalvideo(net:ConvexMask, path:str, out_path:str=None):
     cleanup_and_exit()
 
 def evaluate(net:ConvexMask, dataset, score_fold=None, train_mode=False):
-    net.detect.use_fast_nms = args.fast_nms
-    net.detect.use_cross_class_nms = args.cross_class_nms
     cfg.mask_proto_debug = args.mask_proto_debug
 
     # TODO Currently we do not support Fast Mask Re-scroing in evalimage, evalimages, and evalvideo

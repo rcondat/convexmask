@@ -4,7 +4,7 @@ from ..box_utils import jaccard
 from ..polar_utils import poly2bbox, polar2poly, polar2mask, poly_iou
 from utils import timer
 import time
-from data import cfg, mask_type
+from data import cfg
 
 import numpy as np
 import math
@@ -28,7 +28,6 @@ class Detect(object):
         self.conf_thresh = conf_thresh
         
         self.use_cross_class_nms = False
-        self.use_fast_nms = True
 
 
     def __call__(self, predictions, net):
@@ -44,7 +43,7 @@ class Detect(object):
                 Shape: [batch, num_priors, mask_dim]
             prior_data: (tensor) Prior boxes and variances from priorbox layers
                 Shape: [num_priors, 4]
-            proto_data: (tensor) If using mask_type.lincomb, the prototype masks
+            proto_data: (tensor) The prototype masks
                 Shape: [batch, mask_h, mask_w, mask_dim]
         
         Returns:
@@ -115,16 +114,11 @@ class Detect(object):
         
         if scores.size(1) == 0:
             return None
-        if self.use_fast_nms:
-            if self.use_cross_class_nms:
-                boxes, masks, classes, scores, centerness, polygons, points = self.cc_fast_nms(boxes, masks, scores, centerness, polygons, points_data, self.nms_thresh, self.top_k)
-            else:
-                boxes, masks, classes, scores, centerness, polygons, points = self.fast_nms(boxes, masks, scores, centerness, polygons, points_data, self.nms_thresh, self.top_k)
+        
+        if self.use_cross_class_nms:
+            boxes, masks, classes, scores, centerness, polygons, points = self.cc_fast_nms(boxes, masks, scores, centerness, polygons, points_data, self.nms_thresh, self.top_k)
         else:
-            boxes, masks, classes, scores, centerness, polygons = self.traditional_nms(boxes, masks, scores, self.nms_thresh, self.conf_thresh, centerness, polygons)
-
-            if self.use_cross_class_nms:
-                print('Warning: Cross Class Traditional NMS is not implemented.')
+            boxes, masks, classes, scores, centerness, polygons, points = self.fast_nms(boxes, masks, scores, centerness, polygons, points_data, self.nms_thresh, self.top_k)
 
         return {'box': boxes, 'mask': masks, 'class': classes, 'score': scores, 'centerness': centerness, 'polygons': polygons, 'points': points}
 
@@ -137,13 +131,13 @@ class Detect(object):
         idx = idx[:top_k]
 
         boxes_idx = boxes[idx]
-
+        polygons_idx = polygons[idx]
         if cfg.nms_poly:
-            poly_masks = polar2mask(points[idx][None,...].clone(),polygons[idx][None,...].clone(),(cfg.max_size[0]//5,cfg.max_size[1]//5)).permute((2,3,0,1))
-            iou = mask_iou(poly_masks,poly_masks)[0]
+            iou = poly_iou(boxes_idx,polygons_idx,points,R=72,box_iou_thresh=0.05)
+            iou = iou + iou.transpose(0,1)
         else:
             # Compute the pairwise IoU between the boxes
-            iou = jaccard(boxes_idx, boxes_idx)
+            iou = jaccard(boxes_idx[None,...], boxes_idx[None,...])[0]
         
         # Zero out the lower triangle of the cosine similarity matrix and diagonal
         iou.triu_(diagonal=1)
@@ -170,8 +164,6 @@ class Detect(object):
         scores = scores[:, :top_k]
         num_classes, num_dets = idx.size()
         
-        # Polygon NMS
-        # Create poly_masks
         if cfg.nms_poly:
             iou = poly_iou(boxes,polygons,points,R=72,idx=idx,box_iou_thresh=0.05)
             iou = iou + iou.transpose(0,1)
@@ -231,52 +223,3 @@ class Detect(object):
         if points is not None:
             points = points[idx]
         return boxes, masks, classes, scores, centerness, polygons, points
-
-    def traditional_nms(self, boxes, masks, scores, iou_threshold=0.5, conf_thresh=0.05, centerness=None, polygons=None):
-        import pyximport
-        pyximport.install(setup_args={"include_dirs":np.get_include()}, reload_support=True)
-
-        from utils.cython_nms import nms as cnms
-
-        num_classes = scores.size(0)
-
-        idx_lst = []
-        cls_lst = []
-        scr_lst = []
-        
-        max_size = torch.Tensor([cfg.max_size[0],cfg.max_size[1],cfg.max_size[0],cfg.max_size[1]])
-        
-        # Multiplying by max_size is necessary because of how cnms computes its area and intersections
-        boxes = boxes * max_size
-
-        for _cls in range(num_classes):
-            cls_scores = scores[_cls, :]
-            idx = torch.arange(cls_scores.size(0), device=boxes.device)
-
-            if cls_scores.size(0) == 0:
-                continue
-            
-            preds = torch.cat([boxes, cls_scores[:, None]], dim=1).cpu().numpy()
-            keep = cnms(preds, iou_threshold)
-            keep = torch.Tensor(keep, device=boxes.device).long()
-
-            idx_lst.append(idx[keep])
-            cls_lst.append(keep * 0 + _cls)
-            scr_lst.append(cls_scores[keep])
-        
-        idx     = torch.cat(idx_lst, dim=0)
-        classes = torch.cat(cls_lst, dim=0)
-        scores  = torch.cat(scr_lst, dim=0)
-
-        scores, idx2 = scores.sort(0, descending=True)
-        idx2 = idx2[:cfg.max_num_detections]
-        scores = scores[:cfg.max_num_detections]
-
-        idx = idx[idx2]
-        classes = classes[idx2]
-        if centerness is not None:
-            centerness = centerness[idx]
-        if polygons is not None:
-            polygons = polygons[idx]
-        # Undo the multiplication above
-        return boxes[idx] / max_size, masks[idx], classes, scores, centerness, polygons

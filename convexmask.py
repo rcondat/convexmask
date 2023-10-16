@@ -8,7 +8,7 @@ from math import sqrt
 from typing import List
 from collections import defaultdict
 import math
-from data.config import cfg, mask_type
+from data.config import cfg
 from layers import Detect
 from layers.interpolate import InterpolateModule
 from backbone import construct_backbone
@@ -64,12 +64,6 @@ class PredictionModule(nn.Module):
         self.num_rays    = cfg.num_rays
         self.regress_ranges = [i*cfg.regress_factor for i in regress_ranges] 
         self.ratio_distances = cfg.ratio_distances
-
-        if cfg.mask_proto_split_prototypes_by_head and cfg.mask_type == mask_type.lincomb:
-            self.mask_dim = self.mask_dim // self.num_heads
-
-        if cfg.mask_proto_prototypes_as_features:
-            in_channels += self.mask_dim
         
         if parent is None:
             if cfg.extra_head_net is None:
@@ -77,21 +71,10 @@ class PredictionModule(nn.Module):
             else:
                 self.upfeature, out_channels = make_net(in_channels, cfg.extra_head_net)
 
-            if cfg.use_prediction_module:
-                self.block = Bottleneck(out_channels, out_channels // 4)
-                self.conv = nn.Conv2d(out_channels, out_channels, kernel_size=1, bias=True)
-                self.bn = nn.BatchNorm2d(out_channels)
-
             self.conf_layer = nn.Conv2d(out_channels, self.num_classes, **cfg.head_layer_params) # Classification
             self.center_layer = nn.Conv2d(out_channels, 1, **cfg.head_layer_params) # Centerness
             self.polygon_layer = nn.Conv2d(out_channels, self.num_rays, **cfg.head_layer_params) # Polygon
             self.mask_layer = nn.Conv2d(out_channels, self.mask_dim,    **cfg.head_layer_params) # Mask Segmentation
-            
-            if cfg.use_mask_scoring:
-                self.score_layer = nn.Conv2d(out_channels, 1, **cfg.head_layer_params)
-
-            if cfg.use_instance_coeff:
-                self.inst_layer = nn.Conv2d(out_channels, cfg.num_instance_coeffs, **cfg.head_layer_params)
             
             # What is this ugly lambda doing in the middle of all this clean prediction module code?
             def make_extra(num_layers):
@@ -106,9 +89,6 @@ class PredictionModule(nn.Module):
 
             self.conf_extra, self.poly_extra, self.mask_extra = [make_extra(x) for x in cfg.extra_layers]
             
-            if cfg.mask_type == mask_type.lincomb and cfg.mask_proto_coeff_gate:
-                self.gate_layer = nn.Conv2d(out_channels, self.mask_dim, kernel_size=3, padding=1)
-
         self.scales = scales
 
         self.priors = None
@@ -136,17 +116,6 @@ class PredictionModule(nn.Module):
         
         if cfg.extra_head_net is not None:
             x = src.upfeature(x)
-        
-        if cfg.use_prediction_module:
-            # The two branches of PM design (c)
-            a = src.block(x)
-            
-            b = src.conv(x)
-            b = src.bn(b)
-            b = F.relu(b)
-            
-            # TODO: Possibly switch this out for a product
-            x = a + b
 
         conf_x = src.conf_extra(x)
         poly_x = src.poly_extra(x)
@@ -161,25 +130,12 @@ class PredictionModule(nn.Module):
         
         mask = src.mask_layer(mask_x).permute(0, 2, 3, 1).contiguous().view(x.size(0), -1, self.mask_dim)
 
-        if cfg.use_mask_scoring:
-            score = src.score_layer(x).permute(0, 2, 3, 1).contiguous().view(x.size(0), -1, 1)
 
-        if cfg.use_instance_coeff:
-            inst = src.inst_layer(x).permute(0, 2, 3, 1).contiguous().view(x.size(0), -1, cfg.num_instance_coeffs)    
 
+        
 
         if cfg.eval_mask_branch:
-            if cfg.mask_type == mask_type.direct:
-                mask = torch.sigmoid(mask)
-            elif cfg.mask_type == mask_type.lincomb:
-                mask = cfg.mask_proto_coeff_activation(mask)
-
-                if cfg.mask_proto_coeff_gate:
-                    gate = src.gate_layer(x).permute(0, 2, 3, 1).contiguous().view(x.size(0), -1, self.mask_dim)
-                    mask = mask * torch.sigmoid(gate)
-
-        if cfg.mask_proto_split_prototypes_by_head and cfg.mask_type == mask_type.lincomb:
-            mask = F.pad(mask, (self.index * self.mask_dim, (self.num_heads - self.index - 1) * self.mask_dim), mode='constant', value=0)
+            mask = torch.tanh(mask)
         
         self.last_img_size = (cfg._tmp_img_w, cfg._tmp_img_h)
         self.last_conv_size = (conv_w, conv_h)
@@ -192,11 +148,8 @@ class PredictionModule(nn.Module):
         preds = {'conf': conf, 'center': center, 'polygon': polygon, 'mask': mask, 'points': points, 
                  'regress_ranges': regress_ranges} 
 
-        if cfg.use_mask_scoring:
-            preds['score'] = score
 
-        if cfg.use_instance_coeff:
-            preds['inst'] = inst
+
         
         return preds
 
@@ -313,20 +266,6 @@ class FPN(ScriptModuleWrapper):
 
         return out
 
-class FastMaskIoUNet(ScriptModuleWrapper):
-
-    def __init__(self):
-        super().__init__()
-        input_channels = 1
-        last_layer = [(cfg.num_classes-1, 1, {})]
-        self.maskiou_net, _ = make_net(input_channels, cfg.maskiou_net + last_layer, include_last_relu=True)
-
-    def forward(self, x):
-        x = self.maskiou_net(x)
-        maskiou_p = F.max_pool2d(x, kernel_size=x.size()[2:]).squeeze(-1).squeeze(-1)
-
-        return maskiou_p
-
 
 
 class ConvexMask(nn.Module):
@@ -353,34 +292,25 @@ class ConvexMask(nn.Module):
             self.freeze_bn()
 
         # Compute mask_dim here and add it back to the config. Make sure Yolact's constructor is called early!
-        if cfg.mask_type == mask_type.direct:
-            cfg.mask_dim = cfg.mask_size**2
-        elif cfg.mask_type == mask_type.lincomb:
-            if cfg.mask_proto_use_grid:
-                self.grid = torch.Tensor(np.load(cfg.mask_proto_grid_file))
-                self.num_grids = self.grid.size(0)
-            else:
-                self.num_grids = 0
 
-            self.proto_src = cfg.mask_proto_src
-            
-            if self.proto_src is None: in_channels = 3
-            elif cfg.fpn is not None: in_channels = cfg.fpn.num_features
-            else: in_channels = self.backbone.channels[self.proto_src]
-            in_channels += self.num_grids
+        self.num_grids = 0
 
-            # The include_last_relu=false here is because we might want to change it to another function
-            self.proto_net, cfg.mask_dim = make_net(in_channels, cfg.mask_proto_net, include_last_relu=False)
+        self.proto_src = 0
+        
+        if self.proto_src is None: in_channels = 3
+        elif cfg.fpn is not None: in_channels = cfg.fpn.num_features
+        else: in_channels = self.backbone.channels[self.proto_src]
+        in_channels += self.num_grids
 
-            if cfg.mask_proto_bias:
-                cfg.mask_dim += 1
+        # The include_last_relu=false here is because we might want to change it to another function
+        self.proto_net, cfg.mask_dim = make_net(in_channels, cfg.mask_proto_net, include_last_relu=False)
+
+        if cfg.mask_proto_bias:
+            cfg.mask_dim += 1
 
 
         self.selected_layers = cfg.backbone.selected_layers
         src_channels = self.backbone.channels
-
-        if cfg.use_maskiou:
-            self.maskiou_net = FastMaskIoUNet()
 
         if cfg.fpn is not None:
             # Some hacky rewiring to accomodate the FPN
@@ -406,12 +336,7 @@ class ConvexMask(nn.Module):
                                     regress_ranges = cfg.backbone.regress_ranges[idx])
             self.prediction_layers.append(pred)
 
-        # Extra parameters for the extra losses
-        if cfg.use_class_existence_loss:
-            # This comes from the smallest layer selected
-            # Also note that cfg.num_classes includes background
-            self.class_existence_fc = nn.Linear(src_channels[-1], cfg.num_classes - 1)
-        
+        # Extra parameters for the extra losses       
         if cfg.use_semantic_segmentation_loss:
             self.semantic_seg_conv = nn.Conv2d(src_channels[0], cfg.num_classes-1, kernel_size=1)
 
@@ -511,22 +436,8 @@ class ConvexMask(nn.Module):
                 
                 if module.bias is not None:
                     if cfg.use_focal_loss and 'conf_layer' in name:
-                        if not cfg.use_sigmoid_focal_loss:
-                            # Initialize the last layer as in the focal loss paper.
-                            # Because we use softmax and not sigmoid, I had to derive an alternate expression
-                            # on a notecard. Define pi to be the probability of outputting a foreground detection.
-                            # Then let z = sum(exp(x)) - exp(x_0). Finally let c be the number of foreground classes.
-                            # Chugging through the math, this gives us
-                            #   x_0 = log(z * (1 - pi) / pi)    where 0 is the background class
-                            #   x_i = log(z / c)                for all i > 0
-                            # For simplicity (and because we have a degree of freedom here), set z = 1. Then we have
-                            #   x_0 =  log((1 - pi) / pi)       note: don't split up the log for numerical stability
-                            #   x_i = -log(c)                   for all i > 0
-                            module.bias.data[0]  = np.log((1 - cfg.focal_loss_init_pi) / cfg.focal_loss_init_pi)
-                            module.bias.data[1:] = -np.log(module.bias.size(0) - 1)
-                        else:
-                            module.bias.data[0]  = -np.log(cfg.focal_loss_init_pi / (1 - cfg.focal_loss_init_pi))
-                            module.bias.data[1:] = -np.log((1 - cfg.focal_loss_init_pi) / cfg.focal_loss_init_pi)
+                        module.bias.data[0]  = -np.log(cfg.focal_loss_init_pi / (1 - cfg.focal_loss_init_pi))
+                        module.bias.data[1:] = -np.log((1 - cfg.focal_loss_init_pi) / cfg.focal_loss_init_pi)
                     else:
                         module.bias.data.zero_()
             """
@@ -582,7 +493,7 @@ class ConvexMask(nn.Module):
                 outs = self.fpn(outs)
 
         proto_out = None
-        if cfg.mask_type == mask_type.lincomb and cfg.eval_mask_branch:
+        if cfg.eval_mask_branch:
             with timer.env('proto'):
                 proto_x = x if self.proto_src is None else outs[self.proto_src]
                 
@@ -591,14 +502,7 @@ class ConvexMask(nn.Module):
                     proto_x = torch.cat([proto_x, grids], dim=1)
 
                 proto_out = self.proto_net(proto_x)
-                proto_out = cfg.mask_proto_prototype_activation(proto_out)
-
-                if cfg.mask_proto_prototypes_as_features:
-                    # Clone here because we don't want to permute this, though idk if contiguous makes this unnecessary
-                    proto_downsampled = proto_out.clone()
-
-                    if cfg.mask_proto_prototypes_as_features_no_grad:
-                        proto_downsampled = proto_out.detach()
+                proto_out = torch.relu(proto_out)
                 
                 # Move the features last so the multiplication is easy
                 proto_out = proto_out.permute(0, 2, 3, 1).contiguous()
@@ -611,19 +515,9 @@ class ConvexMask(nn.Module):
 
         with timer.env('pred_heads'):
             pred_outs = {'conf': [], 'center': [], 'polygon': [], 'mask': [], 'points': [], 'regress_ranges': []} 
-            if cfg.use_mask_scoring:
-                pred_outs['score'] = []
-
-            if cfg.use_instance_coeff:
-                pred_outs['inst'] = []
             
             for idx, pred_layer in zip(self.selected_layers, self.prediction_layers):
                 pred_x = outs[idx]
-                
-                if cfg.mask_type == mask_type.lincomb and cfg.mask_proto_prototypes_as_features:
-                    # Scale the prototypes down to the current prediction layer's size and add it as inputs
-                    proto_downsampled = F.interpolate(proto_downsampled, size=outs[idx].size()[2:], mode='bilinear', align_corners=False)
-                    pred_x = torch.cat([pred_x, proto_downsampled], dim=1)
 
                 # A hack for the way dataparallel works
                 if cfg.share_prediction_module and pred_layer is not self.prediction_layers[0]:
@@ -646,9 +540,6 @@ class ConvexMask(nn.Module):
 
         if self.training:
             # For the extra loss functions
-            if cfg.use_class_existence_loss:
-                pred_outs['classes'] = self.class_existence_fc(outs[-1].mean(dim=(2, 3)))
-
             if cfg.use_semantic_segmentation_loss:
                 pred_outs['segm'] = self.semantic_seg_conv(outs[0])
 
@@ -656,32 +547,11 @@ class ConvexMask(nn.Module):
         else:
             pred_outs['center']=torch.sigmoid(pred_outs['center'])
 
-            if cfg.use_mask_scoring:
-                pred_outs['score'] = torch.sigmoid(pred_outs['score'])
-
             if cfg.use_focal_loss:
-                if cfg.use_sigmoid_focal_loss:
-                    # Note: even though conf[0] exists, this mode doesn't train it so don't use it
-                    pred_outs['conf'] = torch.sigmoid(pred_outs['conf'])
-                    if cfg.use_mask_scoring:
-                        pred_outs['conf'] *= pred_outs['score']
-                elif cfg.use_objectness_score:
-                    # See focal_loss_sigmoid in multibox_loss.py for details
-                    objectness = torch.sigmoid(pred_outs['conf'][:, :, 0])
-                    pred_outs['conf'][:, :, 1:] = objectness[:, :, None] * F.softmax(pred_outs['conf'][:, :, 1:], -1)
-                    pred_outs['conf'][:, :, 0 ] = 1 - objectness
-                else:
-                    pred_outs['conf'] = F.softmax(pred_outs['conf'], -1)
-            else:
+                pred_outs['conf'] = torch.sigmoid(pred_outs['conf'])
 
-                if cfg.use_objectness_score:
-                    objectness = torch.sigmoid(pred_outs['conf'][:, :, 0])
-                    
-                    pred_outs['conf'][:, :, 1:] = (objectness > 0.10)[..., None] \
-                        * F.softmax(pred_outs['conf'][:, :, 1:], dim=-1)
-                    
-                else:
-                    pred_outs['conf'] = F.softmax(pred_outs['conf'], -1)
+            else:
+                pred_outs['conf'] = F.softmax(pred_outs['conf'], -1)
 
             return self.detect(pred_outs, self)
 
